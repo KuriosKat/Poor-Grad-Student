@@ -1,6 +1,9 @@
+##Play at: https://sage-centaur-e02e60.netlify.app/
+
 # 불쌍한 대학원생 서바이벌 (Graduate Student Survival)
 
 대학원생의 고달픈 일상을 체험하는 시뮬레이션 웹 게임입니다.
+
 
 ![Game Screenshot](./screenshot.png)
 
