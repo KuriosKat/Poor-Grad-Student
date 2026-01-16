@@ -1,11 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Zap, Heart, Sparkles, TrendingUp } from "lucide-react";
-import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 import { StatBar } from "@/components/game/StatBar";
@@ -16,19 +14,43 @@ import { GameOverScreen } from "@/components/game/GameOverScreen";
 import { StartScreen } from "@/components/game/StartScreen";
 import { EventLog } from "@/components/game/EventLog";
 
-import type { GameState, GameEvent, ActionType } from "@shared/schema";
+import { useGameState } from "@/hooks/useGameState";
+import { 
+  fireConfetti, 
+  fireGraduation, 
+  firePositiveEvent, 
+  fireNegativeEvent, 
+  fireCoffee, 
+  fireRamen, 
+  fireMoney, 
+  fireResearch 
+} from "@/lib/effects";
+
+import type { ActionType } from "@shared/schema";
 import { GAME_ACTIONS } from "@shared/schema";
 
 export default function Home() {
-  const [gameId, setGameId] = useState<string | null>(null);
-  const [currentEvent, setCurrentEvent] = useState<GameEvent | null>(null);
+  const {
+    gameState,
+    isLoading,
+    lastEvent,
+    statChanges,
+    createGame,
+    performAction,
+    resetGame,
+    clearLastEvent,
+  } = useGameState();
+
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window !== "undefined") {
       return document.documentElement.classList.contains("dark");
     }
     return false;
   });
-  const [statChanges, setStatChanges] = useState<Record<string, number>>({});
+  
+  const [screenEffect, setScreenEffect] = useState<"positive" | "negative" | null>(null);
+  const [isActionPending, setIsActionPending] = useState(false);
+  const mainRef = useRef<HTMLDivElement>(null);
   
   const { toast } = useToast();
 
@@ -53,121 +75,90 @@ export default function Home() {
     }
   }, []);
 
-  const { data: gameState, isLoading: isLoadingGame } = useQuery<GameState>({
-    queryKey: ["/api/game", gameId],
-    queryFn: async () => {
-      const response = await fetch(`/api/game/${gameId}`);
-      if (!response.ok) throw new Error("Failed to fetch game");
-      return response.json();
-    },
-    enabled: !!gameId,
-    refetchOnWindowFocus: false,
-  });
-
-  const createGameMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/game");
-      return response.json();
-    },
-    onSuccess: (data: GameState) => {
-      setGameId(data.id);
-      queryClient.setQueryData(["/api/game", data.id], data);
-    },
-    onError: () => {
+  useEffect(() => {
+    if (gameState?.isGraduated) {
+      fireGraduation();
       toast({
-        title: "오류",
-        description: "게임을 시작할 수 없습니다.",
+        title: "축하합니다!",
+        description: "드디어 졸업에 성공했습니다!",
+      });
+    } else if (gameState?.isGameOver) {
+      setScreenEffect("negative");
+      setTimeout(() => setScreenEffect(null), 500);
+      toast({
+        title: "게임 오버",
+        description: "다음에는 더 잘할 수 있을 거예요...",
         variant: "destructive",
       });
-    },
-  });
+    }
+  }, [gameState?.isGraduated, gameState?.isGameOver, toast]);
 
-  const actionMutation = useMutation({
-    mutationFn: async (action: ActionType) => {
-      const response = await apiRequest("POST", "/api/game/action", {
-        gameId,
-        action,
-      });
-      return response.json();
-    },
-    onSuccess: (data: { gameState: GameState; event?: GameEvent; changes: Record<string, number> }) => {
-      queryClient.setQueryData(["/api/game", gameId], data.gameState);
-      
-      setStatChanges(data.changes);
-      setTimeout(() => setStatChanges({}), 1000);
-      
-      if (data.event) {
-        setCurrentEvent(data.event);
+  useEffect(() => {
+    if (lastEvent) {
+      if (lastEvent.isPositive) {
+        setScreenEffect("positive");
+        firePositiveEvent();
+      } else {
+        setScreenEffect("negative");
+        if (mainRef.current) {
+          mainRef.current.classList.add("animate-shake");
+          setTimeout(() => {
+            mainRef.current?.classList.remove("animate-shake");
+          }, 500);
+        }
+        fireNegativeEvent();
+      }
+      setTimeout(() => setScreenEffect(null), 300);
+    }
+  }, [lastEvent]);
+
+  const handleAction = useCallback((actionType: ActionType) => {
+    if (isActionPending) return;
+    
+    setIsActionPending(true);
+    
+    const result = performAction(actionType);
+    
+    if (result.success) {
+      switch (actionType) {
+        case "drinkCoffee":
+          fireCoffee();
+          break;
+        case "eatRamen":
+          fireRamen();
+          break;
+        case "partTimeJob":
+          fireMoney();
+          break;
+        case "readPapers":
+        case "experiment":
+        case "writePaper":
+          fireResearch();
+          break;
       }
       
-      if (data.gameState.isGraduated) {
-        toast({
-          title: "축하합니다!",
-          description: "드디어 졸업에 성공했습니다!",
-        });
-      } else if (data.gameState.isGameOver) {
-        toast({
-          title: "게임 오버",
-          description: "다음에는 더 잘할 수 있을 거예요...",
-          variant: "destructive",
-        });
+      if (result.changes.research && result.changes.research >= 15) {
+        fireConfetti();
       }
-    },
-    onError: () => {
-      toast({
-        title: "오류",
-        description: "행동을 수행할 수 없습니다.",
-        variant: "destructive",
-      });
-    },
-  });
+    }
+    
+    setTimeout(() => setIsActionPending(false), 300);
+  }, [performAction, isActionPending]);
 
   const handleStart = () => {
-    createGameMutation.mutate();
+    createGame();
+    fireConfetti();
   };
 
   const handleNewGame = () => {
-    setGameId(null);
-    setCurrentEvent(null);
-    setStatChanges({});
+    resetGame();
   };
-
-  const handleAction = (actionType: ActionType) => {
-    if (!gameId || actionMutation.isPending) return;
-    actionMutation.mutate(actionType);
-  };
-
-  const closeEventModal = () => {
-    setCurrentEvent(null);
-  };
-
-  if (!gameId) {
-    return (
-      <StartScreen 
-        onStart={handleStart} 
-        isLoading={createGameMutation.isPending} 
-      />
-    );
-  }
-
-  if (isLoadingGame) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-        >
-          <Sparkles className="w-8 h-8 text-primary" />
-        </motion.div>
-      </div>
-    );
-  }
 
   if (!gameState) {
     return (
       <StartScreen 
         onStart={handleStart} 
-        isLoading={createGameMutation.isPending} 
+        isLoading={isLoading} 
       />
     );
   }
@@ -192,7 +183,12 @@ export default function Home() {
   );
 
   return (
-    <div className="min-h-screen bg-background">
+    <div 
+      className={`min-h-screen bg-background transition-all duration-200 ${
+        screenEffect === "positive" ? "screen-flash-positive" : 
+        screenEffect === "negative" ? "screen-flash-negative" : ""
+      }`}
+    >
       <GameHeader
         day={gameState.day}
         semester={gameState.semester}
@@ -201,162 +197,259 @@ export default function Home() {
         onNewGame={handleNewGame}
       />
 
-      <main className="container max-w-2xl mx-auto px-4 py-6 space-y-6">
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+      <main ref={mainRef} className="container max-w-2xl mx-auto px-4 py-6 space-y-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+        >
+          <Card className="overflow-hidden">
+            <CardHeader className="pb-3 bg-gradient-to-r from-primary/5 to-transparent">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base font-semibold flex items-center gap-2">
+                  <motion.div
+                    animate={{ scale: [1, 1.2, 1] }}
+                    transition={{ duration: 2, repeat: Infinity }}
+                  >
+                    <Heart className="w-4 h-4 text-red-500" />
+                  </motion.div>
+                  상태
+                </CardTitle>
+                <motion.div
+                  key={gameState.stats.research}
+                  initial={{ scale: 0.8 }}
+                  animate={{ scale: 1 }}
+                  transition={{ type: "spring", stiffness: 500 }}
+                >
+                  <Badge 
+                    variant="outline" 
+                    className={`text-xs ${
+                      gameState.stats.research >= 80 
+                        ? "border-green-500 text-green-600 dark:text-green-400 animate-glow-pulse" 
+                        : ""
+                    }`}
+                  >
+                    <TrendingUp className="w-3 h-3 mr-1" />
+                    졸업까지 {Math.max(0, 100 - Math.round(gameState.stats.research))}%
+                  </Badge>
+                </motion.div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4 pt-4">
+              <StatBar
+                type="health"
+                value={gameState.stats.health}
+                maxValue={100}
+                label="체력"
+                showChange={statChanges.health}
+              />
+              <StatBar
+                type="mental"
+                value={gameState.stats.mental}
+                maxValue={100}
+                label="멘탈"
+                showChange={statChanges.mental}
+              />
+              <StatBar
+                type="research"
+                value={gameState.stats.research}
+                maxValue={100}
+                label="연구 진척도"
+                showChange={statChanges.research}
+              />
+              <StatBar
+                type="money"
+                value={gameState.stats.money}
+                maxValue={1000000}
+                label="돈"
+                showChange={statChanges.money}
+              />
+              <StatBar
+                type="advisor"
+                value={gameState.stats.advisorFavor}
+                maxValue={100}
+                label="교수 호감도"
+                showChange={statChanges.advisorFavor}
+              />
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.1 }}
+        >
+          <Card>
+            <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <Heart className="w-4 h-4 text-red-500" />
-                상태
+                <motion.div
+                  animate={{ rotate: [0, 15, -15, 0] }}
+                  transition={{ duration: 0.5, repeat: Infinity, repeatDelay: 2 }}
+                >
+                  <Zap className="w-4 h-4 text-yellow-500" />
+                </motion.div>
+                행동
               </CardTitle>
-              <Badge variant="outline" className="text-xs">
-                <TrendingUp className="w-3 h-3 mr-1" />
-                졸업까지 {Math.max(0, 100 - Math.round(gameState.stats.research))}%
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <StatBar
-              type="health"
-              value={gameState.stats.health}
-              maxValue={100}
-              label="체력"
-              showChange={statChanges.health}
-            />
-            <StatBar
-              type="mental"
-              value={gameState.stats.mental}
-              maxValue={100}
-              label="멘탈"
-              showChange={statChanges.mental}
-            />
-            <StatBar
-              type="research"
-              value={gameState.stats.research}
-              maxValue={100}
-              label="연구 진척도"
-              showChange={statChanges.research}
-            />
-            <StatBar
-              type="money"
-              value={gameState.stats.money}
-              maxValue={1000000}
-              label="돈"
-              showChange={statChanges.money}
-            />
-            <StatBar
-              type="advisor"
-              value={gameState.stats.advisorFavor}
-              maxValue={100}
-              label="교수 호감도"
-              showChange={statChanges.advisorFavor}
-            />
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent>
+              <Tabs defaultValue="research" className="w-full">
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="research" data-testid="tab-research">연구</TabsTrigger>
+                  <TabsTrigger value="life" data-testid="tab-life">생활</TabsTrigger>
+                  <TabsTrigger value="work" data-testid="tab-work">알바</TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="research" className="mt-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    {researchActions.map((action, index) => (
+                      <motion.div
+                        key={action.type}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                      >
+                        <ActionButton
+                          action={action}
+                          onAction={() => handleAction(action.type)}
+                          disabled={isActionPending}
+                          isLoading={isActionPending}
+                        />
+                      </motion.div>
+                    ))}
+                  </div>
+                </TabsContent>
+                
+                <TabsContent value="life" className="mt-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    {lifeActions.map((action, index) => (
+                      <motion.div
+                        key={action.type}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                      >
+                        <ActionButton
+                          action={action}
+                          onAction={() => handleAction(action.type)}
+                          disabled={isActionPending}
+                          isLoading={isActionPending}
+                        />
+                      </motion.div>
+                    ))}
+                  </div>
+                </TabsContent>
+                
+                <TabsContent value="work" className="mt-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    {workActions.map((action, index) => (
+                      <motion.div
+                        key={action.type}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                      >
+                        <ActionButton
+                          action={action}
+                          onAction={() => handleAction(action.type)}
+                          disabled={isActionPending}
+                          isLoading={isActionPending}
+                        />
+                      </motion.div>
+                    ))}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        </motion.div>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base font-semibold flex items-center gap-2">
-              <Zap className="w-4 h-4 text-yellow-500" />
-              행동
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Tabs defaultValue="research" className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="research" data-testid="tab-research">연구</TabsTrigger>
-                <TabsTrigger value="life" data-testid="tab-life">생활</TabsTrigger>
-                <TabsTrigger value="work" data-testid="tab-work">알바</TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="research" className="mt-4">
-                <div className="grid grid-cols-2 gap-3">
-                  {researchActions.map((action) => (
-                    <ActionButton
-                      key={action.type}
-                      action={action}
-                      onAction={() => handleAction(action.type)}
-                      disabled={actionMutation.isPending}
-                      isLoading={actionMutation.isPending}
-                    />
-                  ))}
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="life" className="mt-4">
-                <div className="grid grid-cols-2 gap-3">
-                  {lifeActions.map((action) => (
-                    <ActionButton
-                      key={action.type}
-                      action={action}
-                      onAction={() => handleAction(action.type)}
-                      disabled={actionMutation.isPending}
-                      isLoading={actionMutation.isPending}
-                    />
-                  ))}
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="work" className="mt-4">
-                <div className="grid grid-cols-2 gap-3">
-                  {workActions.map((action) => (
-                    <ActionButton
-                      key={action.type}
-                      action={action}
-                      onAction={() => handleAction(action.type)}
-                      disabled={actionMutation.isPending}
-                      isLoading={actionMutation.isPending}
-                    />
-                  ))}
-                </div>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.2 }}
+        >
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <motion.div
+                  animate={{ 
+                    rotate: [0, 360],
+                    scale: [1, 1.2, 1]
+                  }}
+                  transition={{ duration: 3, repeat: Infinity }}
+                >
+                  <Sparkles className="w-4 h-4 text-purple-500" />
+                </motion.div>
+                최근 이벤트
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <EventLog events={gameState.eventLog} />
+            </CardContent>
+          </Card>
+        </motion.div>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base font-semibold flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-purple-500" />
-              최근 이벤트
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <EventLog events={gameState.eventLog} />
-          </CardContent>
-        </Card>
-
-        <div className="grid grid-cols-4 gap-3">
-          <Card className="p-3 text-center">
-            <p className="text-lg font-bold text-yellow-600 dark:text-yellow-400">
+        <motion.div 
+          className="grid grid-cols-4 gap-3"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.3 }}
+        >
+          <Card className="p-3 text-center hover-elevate">
+            <motion.p 
+              className="text-lg font-bold text-yellow-600 dark:text-yellow-400"
+              key={gameState.coffeeCount}
+              initial={{ scale: 1.5 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring" }}
+            >
               {gameState.coffeeCount}
-            </p>
+            </motion.p>
             <p className="text-xs text-muted-foreground">커피 잔</p>
           </Card>
-          <Card className="p-3 text-center">
-            <p className="text-lg font-bold text-orange-600 dark:text-orange-400">
+          <Card className="p-3 text-center hover-elevate">
+            <motion.p 
+              className="text-lg font-bold text-orange-600 dark:text-orange-400"
+              key={gameState.ramenCount}
+              initial={{ scale: 1.5 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring" }}
+            >
               {gameState.ramenCount}
-            </p>
+            </motion.p>
             <p className="text-xs text-muted-foreground">라면 그릇</p>
           </Card>
-          <Card className="p-3 text-center">
-            <p className="text-lg font-bold text-red-600 dark:text-red-400">
+          <Card className="p-3 text-center hover-elevate">
+            <motion.p 
+              className="text-lg font-bold text-red-600 dark:text-red-400"
+              key={gameState.allNighterCount}
+              initial={{ scale: 1.5 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring" }}
+            >
               {gameState.allNighterCount}
-            </p>
+            </motion.p>
             <p className="text-xs text-muted-foreground">철야 횟수</p>
           </Card>
-          <Card className="p-3 text-center">
-            <p className="text-lg font-bold text-primary">
+          <Card className="p-3 text-center hover-elevate">
+            <motion.p 
+              className="text-lg font-bold text-primary"
+              key={gameState.totalDays}
+              initial={{ scale: 1.5 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring" }}
+            >
               {gameState.totalDays}
-            </p>
+            </motion.p>
             <p className="text-xs text-muted-foreground">총 일수</p>
           </Card>
-        </div>
+        </motion.div>
       </main>
 
       <AnimatePresence>
-        {currentEvent && (
-          <EventModal event={currentEvent} onClose={closeEventModal} />
+        {lastEvent && (
+          <EventModal event={lastEvent} onClose={clearLastEvent} />
         )}
       </AnimatePresence>
     </div>

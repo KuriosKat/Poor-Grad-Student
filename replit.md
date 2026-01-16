@@ -11,7 +11,8 @@
 
 ## Tech Stack
 - **Frontend**: React + TypeScript, Vite, TailwindCSS, Framer Motion
-- **Backend**: Express.js, In-memory storage
+- **State Management**: Client-side with localStorage (useGameState hook)
+- **Effects**: canvas-confetti for visual effects
 - **UI Components**: Shadcn/ui, Lucide icons
 
 ## Project Structure
@@ -27,26 +28,47 @@ client/
 │   │       ├── GameHeader.tsx
 │   │       ├── GameOverScreen.tsx
 │   │       └── StartScreen.tsx
+│   ├── hooks/
+│   │   └── useGameState.ts  # 게임 상태 관리 (localStorage)
+│   ├── lib/
+│   │   └── effects.ts       # 시각 효과 (confetti 등)
 │   ├── pages/
-│   │   └── Home.tsx       # 메인 게임 페이지
+│   │   └── Home.tsx         # 메인 게임 페이지
 │   └── App.tsx
 server/
-├── routes.ts              # API 라우트
+├── routes.ts              # API 라우트 (선택적)
 └── storage.ts             # 게임 상태 관리 (in-memory)
 shared/
 └── schema.ts              # 게임 데이터 타입 및 상수 정의
 ```
 
-## API Endpoints
-- `POST /api/game` - 새 게임 생성
-- `GET /api/game/:gameId` - 게임 상태 조회
-- `POST /api/game/action` - 행동 수행
+## Deployment
+
+### Netlify/GitHub
+- `netlify.toml` 설정 파일 포함
+- Base directory: `client`
+- Build command: `npm run build`
+- Publish directory: `client/dist`
+
+### Replit
+- `npm run dev` 명령으로 개발 서버 실행
+- Port 5000에서 서비스
+
+## Visual Effects
+- 컨페티 효과 (게임 시작, 긍정적 이벤트, 졸업)
+- 화면 흔들림 (부정적 이벤트)
+- 스탯 변화 애니메이션
+- 플로팅 아이콘
+- 그라데이션 배경
 
 ## Running the App
 The app runs on port 5000 with `npm run dev` command.
 
 ## Recent Changes
-- Initial game implementation with full mechanics
+- Enhanced visual effects with confetti and animations
+- Client-side game state management with localStorage
+- Netlify deployment configuration
+- Improved UI/UX with Framer Motion
 - Dark/Light theme support
 - Korean language UI
 - Responsive design for mobile
